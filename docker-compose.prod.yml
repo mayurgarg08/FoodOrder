@@ -1,0 +1,34 @@
+version: '3.9'
+
+services:
+  api:
+    image: "foodappregistrydiya.azurecr.io/food-api:latest"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=tcp:foodserver12345.database.windows.net,1433;Initial Catalog=FoodOrderingDB;Persist Security Info=False;User ID=foodadmin;Password=FoodApp@12345;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
+      - JwtSettings__Secret=${JWT_SECRET}
+      - JwtSettings__Issuer=FoodOrderingAPI
+      - JwtSettings__Audience=FoodOrderingClient
+    restart: always
+    volumes:
+      - uploads_prod:/app/uploads
+    networks:
+      - food-network
+
+  frontend:
+    image: "foodappregistrydiya.azurecr.io/food-frontend:latest"
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+    restart: always
+    networks:
+      - food-network
+
+volumes:
+  uploads_prod:
+
+networks:
+  food-network:
+    driver: bridge

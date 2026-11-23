@@ -1,0 +1,160 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  registry: 'yourregistry.azurecr.io'
+  apiImageName: 'food-api'
+  frontendImageName: 'food-frontend'
+  dockerComposeFile: 'docker-compose.prod.yml'
+
+stages:
+
+# Stage 1: Build & Test
+- stage: Build
+  displayName: 'Build & Test'
+  jobs:
+  - job: BuildAPI
+    displayName: 'Build ASP.NET Core API'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        packageType: 'sdk'
+        version: '8.x'
+
+    - script: dotnet restore src/FoodOrdering.API/FoodOrdering.API.csproj
+      displayName: 'Restore NuGet packages'
+
+    - script: dotnet build src/FoodOrdering.API --no-restore -c Release
+      displayName: 'Build API'
+
+    - script: dotnet test src/FoodOrdering.API.Tests --no-build -c Release --logger trx
+      displayName: 'Run API Tests'
+      continueOnError: true
+
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: 'VSTest'
+        testResultsFiles: '**/*.trx'
+
+  - job: BuildFrontend
+    displayName: 'Build Angular Frontend'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '20.x'
+
+    - script: npm ci
+      workingDirectory: 'src/FoodOrdering.Frontend'
+      displayName: 'Install npm packages'
+
+    - script: npm run build -- --configuration production
+      workingDirectory: 'src/FoodOrdering.Frontend'
+      displayName: 'Build Angular (Production)'
+
+# Stage 2: Docker Build & Push
+- stage: Docker
+  displayName: 'Docker Build & Push'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - job: DockerBuildPush
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Docker@2
+      displayName: 'Login to ACR'
+      inputs:
+        command: login
+        containerRegistry: 'AzureContainerRegistry'
+
+    - task: Docker@2
+      displayName: 'Build & Push API Image'
+      inputs:
+        command: buildAndPush
+        repository: '$(registry)/$(apiImageName)'
+        dockerfile: 'src/FoodOrdering.API/Dockerfile'
+        buildContext: 'src'
+        tags: |
+          $(Build.BuildId)
+          latest
+
+    - task: Docker@2
+      displayName: 'Build & Push Frontend Image'
+      inputs:
+        command: buildAndPush
+        repository: '$(registry)/$(frontendImageName)'
+        dockerfile: 'src/FoodOrdering.Frontend/Dockerfile'
+        buildContext: 'src/FoodOrdering.Frontend'
+        tags: |
+          $(Build.BuildId)
+          latest
+
+# Stage 3: Deploy to Staging
+- stage: DeployStaging
+  displayName: 'Deploy to Staging'
+  dependsOn: Docker
+  jobs:
+  - deployment: DeployStaging
+    environment: 'Staging'
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: 'AzureServiceConnection'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az containerapp update \
+                  --name food-api-staging \
+                  --resource-group FoodAppRG \
+                  --image $(registry)/$(apiImageName):$(Build.BuildId)
+
+                az containerapp update \
+                  --name food-frontend-staging \
+                  --resource-group FoodAppRG \
+                  --image $(registry)/$(frontendImageName):$(Build.BuildId)
+
+# Stage 4: Deploy to Production
+- stage: DeployProduction
+  displayName: 'Deploy to Production'
+  dependsOn: DeployStaging
+  jobs:
+  - deployment: DeployProduction
+    environment: 'Production'
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: 'AzureServiceConnection'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az containerapp update \
+                  --name food-api-prod \
+                  --resource-group FoodAppRG \
+                  --image $(registry)/$(apiImageName):$(Build.BuildId)
+
+                az containerapp update \
+                  --name food-frontend-prod \
+                  --resource-group FoodAppRG \
+                  --image $(registry)/$(frontendImageName):$(Build.BuildId)
