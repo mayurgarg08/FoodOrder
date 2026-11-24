@@ -90,6 +90,7 @@ builder.Services.AddCors(options =>
             "http://localhost:4200",
             "http://frontend:80",
             "http://localhost:80",
+            "https://mayur-food-order.netlify.app",
             "https://*.azurewebsites.net",
             "https://*.azurecontainerapps.io"
         )
